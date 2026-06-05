@@ -225,7 +225,13 @@ def get_updates(offset=None):
         r = requests.get(f"{BASE_URL}/getUpdates", params=params, timeout=12)
         res = r.json()
         if not res.get("ok"):
-            log.error(f"[get_updates] Error from Telegram: {res}")
+            error_code = res.get("error_code", 0)
+            if error_code == 409:
+                # Another instance is running — wait and let it die
+                log.warning("[get_updates] 409 Conflict: another bot instance detected, waiting 5s...")
+                time.sleep(5)
+            else:
+                log.error(f"[get_updates] Error from Telegram: {res}")
         return res.get("result", [])
     except requests.exceptions.Timeout:
         return []
@@ -596,12 +602,16 @@ def flow_got_meds_text(chat_id, raw_text):
         users[cid] = {"patients": {}}
     if "patients" not in users[cid]:
         users[cid]["patients"] = {}
-
-    users[cid]["patients"][pname] = {
-        "name": pname,
-        "meds": med_ids,
-        "added": now_iraq().strftime("%Y-%m-%d %H:%M:%S"),
-    }
+    if pname not in users[cid]["patients"]:
+        # New patient
+        users[cid]["patients"][pname] = {
+            "name":  pname,
+            "meds":  {},
+            "added": now_iraq().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    # Merge new meds into existing ones (don't overwrite!)
+    existing_meds = users[cid]["patients"][pname].setdefault("meds", {})
+    existing_meds.update(med_ids)
     save_users(users)
 
     # Build confirmation message
@@ -1254,6 +1264,13 @@ if __name__ == "__main__":
     if not BOT_TOKEN:
         log.error("❌ BOT_TOKEN is missing! Set it as an environment variable.")
         exit(1)
+
+    # Clear any active webhook so polling works cleanly
+    try:
+        r = requests.post(f"{BASE_URL}/deleteWebhook", json={"drop_pending_updates": False}, timeout=10)
+        log.info(f"📡 deleteWebhook: {r.json().get('description', 'ok')}")
+    except Exception as e:
+        log.warning(f"deleteWebhook failed: {e}")
 
     # Bot polling thread
     threading.Thread(target=run_bot,       daemon=True, name="BotLoop").start()
