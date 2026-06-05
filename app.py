@@ -1060,28 +1060,31 @@ def handle_message(msg):
 # ============================================================
 
 def minutes_since(time_str):
+    """Returns whole minutes elapsed since HH:MM today. Negative = future."""
     try:
         now = now_iraq()
-        t = datetime.strptime(time_str, "%H:%M").replace(year=now.year, month=now.month, day=now.day)
-        diff = (now - t).total_seconds() / 60.0
-        return int(diff)
+        h, m = map(int, time_str.split(":"))
+        return now.hour * 60 + now.minute - (h * 60 + m)
     except:
         return -1
 
+
 def reminder_loop():
-    """Check every minute — send reminders for due medications."""
+    """Check every 60 seconds. Fire at dose time, repeat every 10 min until taken/skipped."""
     log.info("⏰ Reminder scheduler started")
-    sent_this_minute = set()   # avoid duplicate sends within same minute
+    sent_today     = set()   # (cid, pname, med_id, time_str, attempt)
+    last_reset_day = today()
 
     while True:
         try:
             now          = now_iraq()
             current_time = now.strftime("%H:%M")
-            tick_key     = current_time
 
-            if tick_key in sent_this_minute:
-                time.sleep(30)
-                continue
+            # Reset tracking set at midnight
+            if today() != last_reset_day:
+                sent_today.clear()
+                last_reset_day = today()
+                log.info("🔄 Reminder tracker reset for new day.")
 
             users = load_users()
 
@@ -1093,39 +1096,63 @@ def reminder_loop():
                     for med in p.get("meds", {}).values():
                         for t in med.get("times", []):
                             mins = minutes_since(t)
-                            if mins >= 0 and mins % 10 == 0:
-                                if not is_taken(chat_id, pname, med["id"], t) and not is_skipped(chat_id, pname, med["id"], t):
-                                    send_reminder(chat_id, pname, med, t)
-                                    bot_stats["reminders_sent"] += 1
+                            if mins < 0:
+                                continue  # dose time not reached yet
+                            if mins % 10 != 0:
+                                continue  # only fire at 0, 10, 20... minutes after dose
 
-            # Expiry warnings at 08:00
+                            attempt  = mins // 10
+                            sent_key = (cid, pname, med["id"], t, attempt)
+
+                            if sent_key in sent_today:
+                                continue  # already sent this attempt
+
+                            # Mark it regardless so we don't double-send
+                            sent_today.add(sent_key)
+
+                            if is_taken(chat_id, pname, med["id"], t):
+                                continue  # already confirmed
+                            if is_skipped(chat_id, pname, med["id"], t):
+                                continue  # user said skip
+
+                            send_reminder(chat_id, pname, med, t)
+                            bot_stats["reminders_sent"] += 1
+                            log.info(f"🔔 Reminder: {pname} / {med['name']} @ {t} (attempt {attempt})")
+
+            # Daily expiry warnings at 08:00
             if current_time == "08:00":
                 for cid, user in users.items():
-                    chat_id  = user.get("chat_id") or int(cid)
-                    send_expiry_warnings(chat_id, user.get("patients", {}))
+                    chat_id = user.get("chat_id") or int(cid)
+                    key = ("expiry", cid, today())
+                    if key not in sent_today:
+                        sent_today.add(key)
+                        send_expiry_warnings(chat_id, user.get("patients", {}))
 
-            # Missed dose check at 22:00
+            # Missed dose report at 22:00
             if current_time == "22:00":
                 for cid, user in users.items():
-                    chat_id  = user.get("chat_id") or int(cid)
-                    send_missed_check(chat_id, user.get("patients", {}))
+                    chat_id = user.get("chat_id") or int(cid)
+                    key = ("missed", cid, today())
+                    if key not in sent_today:
+                        sent_today.add(key)
+                        send_missed_check(chat_id, user.get("patients", {}))
 
             # Weekly summary every Sunday 09:00
             if now.weekday() == 6 and current_time == "09:00":
                 for cid, user in users.items():
                     chat_id = user.get("chat_id") or int(cid)
-                    msg = fmt_weekly(chat_id, user.get("patients", {}))
-                    send(chat_id, msg, kb=kb_main_menu(True))
+                    key = ("weekly", cid, today())
+                    if key not in sent_today:
+                        sent_today.add(key)
+                        msg = fmt_weekly(chat_id, user.get("patients", {}))
+                        send(chat_id, msg, kb=kb_main_menu(True))
 
-            sent_this_minute.add(tick_key)
-            # Reset tracker after 90 seconds
-            threading.Timer(90, lambda: sent_this_minute.discard(tick_key)).start()
-
-            time.sleep(30)
+            time.sleep(60)  # one check per minute
 
         except Exception as e:
             log.error(f"[reminder_loop] {e}")
             time.sleep(60)
+
 
 
 def send_reminder(chat_id, pname, med, time_str):
