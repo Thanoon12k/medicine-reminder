@@ -5,7 +5,6 @@
 # ╚══════════════════════════════════════════════════════════════╝
 
 import json
-import gradio as gr
 import threading
 import requests
 import time
@@ -1215,105 +1214,6 @@ def run_bot():
             time.sleep(5)
 
 # ============================================================
-# 🖥️ GRADIO STATUS DASHBOARD (Minimal - view only)
-# ============================================================
-
-def dash_status():
-    users    = load_users()
-    patients_total = sum(len(u.get("patients", {})) for u in users.values())
-    meds_total     = sum(
-        len(p.get("meds", {}))
-        for u in users.values()
-        for p in u.get("patients", {}).values()
-    )
-    taken_db = load_taken()
-    taken_today_c = sum(
-        len(ids)
-        for ids_by_pt in taken_db.get(today(), {}).values()
-        for ids in [ids_by_pt]
-    )
-    return (
-        f"## 📊 دكتور بوت v3 — حالة البوت\n\n"
-        f"| | |\n|---|---|\n"
-        f"| 🤖 البوت | {'🟢 يعمل' if BOT_TOKEN else '🔴 لا يعمل'} |\n"
-        f"| 🧠 AI | {'🟢 Groq متصل' if GROQ_API_KEY else '🔴 GROQ_API_KEY مفقود'} |\n"
-        f"| 👥 مستخدمون | {len(users)} |\n"
-        f"| 🏥 مرضى | {patients_total} |\n"
-        f"| 💊 أدوية | {meds_total} |\n"
-        f"| ✅ جرعات اليوم | {taken_today_c} |\n"
-        f"| 📨 رسائل معالَجة | {bot_stats['messages']} |\n"
-        f"| 🔔 تذكيرات أرسلت | {bot_stats['reminders_sent']} |\n"
-        f"| 🕐 وقت التشغيل | {now_iraq().strftime('%H:%M:%S')} |\n"
-        f"\n_آخر تحديث: {now_iraq().strftime('%Y-%m-%d %H:%M:%S')}_"
-    )
-
-
-def dash_logs():
-    try:
-        if os.path.exists("bot.log"):
-            with open("bot.log", "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            return "".join(lines[-60:])
-    except Exception:
-        pass
-    return "لا توجد سجلات بعد."
-
-
-def build_dashboard():
-    with gr.Blocks(
-        title="💊 دكتور بوت v3",
-        theme=gr.themes.Soft(primary_hue="blue", secondary_hue="green"),
-        css="footer{display:none!important}",
-    ) as demo:
-        gr.HTML("""
-        <div style="text-align:center;padding:16px;
-                    background:linear-gradient(135deg,#0d47a1,#1976d2);
-                    border-radius:10px;color:#fff;margin-bottom:16px;">
-          <h1 style="margin:0;font-size:1.7em;">💊 دكتور بوت v3</h1>
-          <p style="margin:4px 0;opacity:.85;">AI Medication Reminder · Multi-Patient · Iraqi Arabic</p>
-        </div>
-        """)
-        with gr.Tabs():
-            with gr.Tab("📊 الحالة"):
-                st_md = gr.Markdown(value=dash_status())
-                gr.Button("🔄 تحديث", variant="primary").click(fn=dash_status, outputs=st_md)
-            with gr.Tab("📋 السجلات"):
-                lg_box = gr.Textbox(value=dash_logs(), lines=25,
-                                    interactive=False, label="bot.log")
-                gr.Button("🔄 تحديث السجلات", variant="primary").click(
-                    fn=dash_logs, outputs=lg_box)
-            with gr.Tab("📖 كيف يعمل؟"):
-                gr.Markdown("""
-## 💊 دكتور بوت v3 — بدون داشبورد، كل شي من تيليغرام
-
-### 🚀 خطوات البدء
-1. ابحث عن البوت في تيليغرام وافتحه
-2. اكتب `/start` — ستظهر رسالة ترحيب
-3. اضغط **➕ أضف مريض** واكتب اسمه
-4. اكتب أدويته بأي أسلوب طبيعي والذكاء الاصطناعي يفهمها
-
-### ⏰ التذكيرات التلقائية
-| النوع | الوقت |
-|-------|-------|
-| تذكير الجرعة | حسب أوقات كل دواء |
-| تحذير الصلاحية | كل يوم 08:00 |
-| الجرعات الفايتة | كل يوم 22:00 |
-| ملخص أسبوعي | كل أحد 09:00 |
-
-### 📱 الأوامر
-| الأمر | الوظيفة |
-|-------|---------|
-| `/start` | ابدأ البوت |
-| `/menu` | القائمة الرئيسية |
-| `/reset` | مسح المحادثة |
-
-### 🔐 المتطلبات (HuggingFace Secrets)
-- `BOT_TOKEN` — من @BotFather
-- `GROQ_API_KEY` — من console.groq.com
-                """)
-    return demo
-
-# ============================================================
 # 🏁 ENTRY POINT
 # ============================================================
 
@@ -1324,11 +1224,21 @@ if __name__ == "__main__":
     log.info(f"BOT_TOKEN:    {'✅' if BOT_TOKEN    else '❌ MISSING'}")
     log.info(f"GROQ_API_KEY: {'✅' if GROQ_API_KEY else '❌ MISSING (AI disabled)'}")
 
+    if not BOT_TOKEN:
+        log.error("❌ BOT_TOKEN is missing! Set it as an environment variable.")
+        exit(1)
+
     # Bot polling thread
     threading.Thread(target=run_bot,       daemon=True, name="BotLoop").start()
     # Reminder scheduler thread
     threading.Thread(target=reminder_loop, daemon=True, name="Reminders").start()
 
-    log.info("🖥️  Launching Gradio dashboard on :7860")
-    demo = build_dashboard()
-    demo.launch(server_name="0.0.0.0", server_port=7860, show_error=True)
+    log.info("🚀 Bot is running! Press Ctrl+C to stop.")
+
+    # Keep main thread alive
+    try:
+        while True:
+            time.sleep(60)
+            log.info(f"📊 Stats — Messages: {bot_stats['messages']}, Reminders: {bot_stats['reminders_sent']}")
+    except KeyboardInterrupt:
+        log.info("🛑 Bot stopped by user.")
