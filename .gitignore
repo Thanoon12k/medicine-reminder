@@ -46,3 +46,11 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Local debugging bridge / captures (not part of the app)
+/watch.ps1
+/cmd.ps1
+/out.txt
+/logcat.txt
+/build_log.txt
+/screen.png

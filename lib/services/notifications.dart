@@ -71,30 +71,77 @@ class NotificationService {
 
   static bool _ready = false;
 
+  /// هل نجحت تهيئة التنبيهات؟ إن كانت false يعمل التطبيق بدون تذكير.
+  static bool get isReady => _ready;
+
+  /// آخر خطأ حدث أثناء التهيئة (يُعرض في شاشة الإعدادات).
+  static String? initError;
+
+  /// اسم أيقونة الإشعار التي قبلها النظام فعلياً.
+  static String? activeIcon;
+
+  /// نجرّب أكثر من صيغة للأيقونة: بعض الأجهزة/الإصدارات لا تقبل بعضها،
+  /// وفشل الأيقونة يجب ألّا يمنع التطبيق من العمل.
+  static const List<String> _iconCandidates = <String>[
+    'ic_notification',
+    '@drawable/ic_notification',
+    'ic_launcher',
+    '@mipmap/ic_launcher',
+  ];
+
   static AndroidFlutterLocalNotificationsPlugin? get _android => _plugin
       .resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin
       >();
 
-  /// تهيئة المنبهات والقنوات.
+  /// تهيئة المنبهات والقنوات. لا ترمي استثناءً أبداً — تسجّل الخطأ وتكمل.
   static Future<void> init({
     required void Function(AlarmPayload payload, String? actionId) onResponse,
   }) async {
     if (_ready) return;
-    _initTimezone();
 
-    const AndroidInitializationSettings androidInit =
-        AndroidInitializationSettings('@drawable/ic_notification');
+    try {
+      _initTimezone();
+    } catch (e) {
+      debugPrint('تعذّر ضبط المنطقة الزمنية: $e');
+    }
 
-    await _plugin.initialize(
-      settings: const InitializationSettings(android: androidInit),
-      onDidReceiveNotificationResponse: (NotificationResponse response) {
-        final AlarmPayload? payload = AlarmPayload.decode(response.payload);
-        if (payload != null) onResponse(payload, response.actionId);
-      },
-    );
+    void handle(NotificationResponse response) {
+      final AlarmPayload? payload = AlarmPayload.decode(response.payload);
+      if (payload != null) onResponse(payload, response.actionId);
+    }
 
-    await _createChannels();
+    Object? lastError;
+    for (final String icon in _iconCandidates) {
+      try {
+        await _plugin.initialize(
+          settings: InitializationSettings(
+            android: AndroidInitializationSettings(icon),
+          ),
+          onDidReceiveNotificationResponse: handle,
+        );
+        activeIcon = icon;
+        lastError = null;
+        break;
+      } catch (e) {
+        lastError = e;
+        debugPrint('تعذّر استعمال أيقونة الإشعار «$icon»: $e');
+      }
+    }
+
+    if (lastError != null) {
+      initError = '$lastError';
+      debugPrint('فشلت تهيئة التنبيهات نهائياً: $lastError');
+      return;
+    }
+
+    try {
+      await _createChannels();
+    } catch (e) {
+      initError = '$e';
+      debugPrint('تعذّر إنشاء قنوات الإشعارات: $e');
+    }
+
     _ready = true;
   }
 
@@ -309,6 +356,7 @@ class NotificationService {
     required List<Snooze> snoozes,
     required Map<int, Medicine> medicinesById,
   }) async {
+    if (!_ready) return;
     try {
       await _plugin.cancelAllPendingNotifications();
     } catch (_) {

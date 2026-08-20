@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  أيقونة الإشعار يُشار إليها من كود Dart فقط، فلا يراها مُقلّص الموارد
+  في نسخة الإصدار وقد يحذفها. هذا الملف يمنع حذفها.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_notification" />

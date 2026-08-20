@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
+import 'core/palette.dart';
 import 'core/theme.dart';
 import 'data/app_state.dart';
 import 'models/models.dart';
@@ -10,18 +11,31 @@ import 'services/notifications.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-Future<void> main() async {
+/// نعرض الواجهة فوراً، ثم نهيّئ كل شيء في الخلفية.
+/// أي فشل في المنبهات أو قاعدة البيانات يظهر كرسالة واضحة،
+/// ولا يترك المستخدم أمام شاشة بيضاء.
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  await NotificationService.init(onResponse: handleNotificationResponse);
-  await appState.load();
   runApp(const MedicineApp());
 }
+
+// ------------------------- توجيه التنبيهات -------------------------
+
+AlarmPayload? _pendingPayload;
+String? _pendingAction;
 
 /// ما يحدث عند الضغط على التنبيه أو أحد أزراره.
 Future<void> handleNotificationResponse(
   AlarmPayload payload,
   String? actionId,
 ) async {
+  // إن وصل التنبيه قبل اكتمال التحميل، نحتفظ به وننفّذه بعد الجاهزية.
+  if (!appState.loaded) {
+    _pendingPayload = payload;
+    _pendingAction = actionId;
+    return;
+  }
+
   final Medicine? medicine = appState.medicineById(payload.medicineId);
   if (medicine == null) return;
 
@@ -55,6 +69,10 @@ Future<void> handleNotificationResponse(
   );
 }
 
+// ------------------------- التطبيق -------------------------
+
+enum _Phase { booting, ready, failed }
+
 class MedicineApp extends StatefulWidget {
   const MedicineApp({super.key});
 
@@ -63,11 +81,14 @@ class MedicineApp extends StatefulWidget {
 }
 
 class _MedicineAppState extends State<MedicineApp> with WidgetsBindingObserver {
+  _Phase _phase = _Phase.booting;
+  String _error = '';
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _afterFirstFrame());
+    _boot();
   }
 
   @override
@@ -76,24 +97,65 @@ class _MedicineAppState extends State<MedicineApp> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  Future<void> _afterFirstFrame() async {
-    // طلب أذونات التنبيه إن لم تكن مفعّلة.
-    final bool enabled = await NotificationService.notificationsEnabled();
-    if (!enabled) {
-      await NotificationService.requestPermissions();
+  Future<void> _boot() async {
+    if (_phase == _Phase.failed) {
+      setState(() => _phase = _Phase.booting);
     }
 
-    // إن فُتح التطبيق بسبب تنبيه، نعرض شاشة المنبه.
-    final (AlarmPayload?, String?) launch =
-        await NotificationService.launchPayload();
-    if (launch.$1 != null) {
-      await handleNotificationResponse(launch.$1!, launch.$2);
+    // ١) التنبيهات — فشلها لا يمنع التطبيق من العمل.
+    await NotificationService.init(onResponse: handleNotificationResponse);
+
+    // ٢) البيانات — هذه ضرورية، وإن فشلت نُظهر الخطأ.
+    try {
+      await appState.load();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _phase = _Phase.failed;
+        _error = '$e';
+      });
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() => _phase = _Phase.ready);
+
+    // ٣) بعد الجاهزية: الأذونات وأي تنبيه فتح التطبيق.
+    await _afterReady();
+  }
+
+  Future<void> _afterReady() async {
+    try {
+      if (!await NotificationService.notificationsEnabled()) {
+        await NotificationService.requestPermissions();
+      }
+    } catch (e) {
+      debugPrint('تعذّر طلب الأذونات: $e');
+    }
+
+    if (_pendingPayload != null) {
+      final AlarmPayload p = _pendingPayload!;
+      final String? a = _pendingAction;
+      _pendingPayload = null;
+      _pendingAction = null;
+      await handleNotificationResponse(p, a);
+      return;
+    }
+
+    try {
+      final (AlarmPayload?, String?) launch =
+          await NotificationService.launchPayload();
+      if (launch.$1 != null) {
+        await handleNotificationResponse(launch.$1!, launch.$2);
+      }
+    } catch (e) {
+      debugPrint('تعذّرت قراءة تنبيه الإقلاع: $e');
     }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed && _phase == _Phase.ready) {
       appState.reschedule();
       appState.refreshUi();
     }
@@ -116,12 +178,133 @@ class _MedicineAppState extends State<MedicineApp> with WidgetsBindingObserver {
           GlobalCupertinoLocalizations.delegate,
         ],
         builder: (BuildContext context, Widget? child) => MediaQuery(
-          data: MediaQuery.of(context).copyWith(
-            textScaler: TextScaler.linear(appState.textScale),
-          ),
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: TextScaler.linear(appState.textScale)),
           child: child ?? const SizedBox.shrink(),
         ),
-        home: const HomeScreen(),
+        home: switch (_phase) {
+          _Phase.booting => const _BootScreen(),
+          _Phase.failed => _BootErrorScreen(message: _error, onRetry: _boot),
+          _Phase.ready => const HomeScreen(),
+        },
+      ),
+    );
+  }
+}
+
+/// شاشة انتظار قصيرة أثناء فتح قاعدة البيانات.
+class _BootScreen extends StatelessWidget {
+  const _BootScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const AppBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Icon(
+                Icons.medication_outlined,
+                size: 72,
+                color: AppColors.primary,
+              ),
+              SizedBox(height: 22),
+              Text(
+                'دوائي',
+                style: TextStyle(
+                  fontSize: 30,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.ink,
+                ),
+              ),
+              SizedBox(height: 26),
+              SizedBox(
+                width: 36,
+                height: 36,
+                child: CircularProgressIndicator(strokeWidth: 3.5),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// تظهر بدل الشاشة البيضاء إن فشل تحميل البيانات.
+class _BootErrorScreen extends StatelessWidget {
+  const _BootErrorScreen({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                const Icon(
+                  Icons.error_outline,
+                  size: 66,
+                  color: AppColors.red,
+                ),
+                const SizedBox(height: 18),
+                const Text(
+                  'تعذّر تشغيل التطبيق',
+                  style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'حدثت مشكلة أثناء فتح بيانات التطبيق.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 18, color: AppColors.muted),
+                ),
+                const SizedBox(height: 20),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.line, width: 1.6),
+                  ),
+                  child: SingleChildScrollView(
+                    child: Text(
+                      message,
+                      textDirection: TextDirection.ltr,
+                      style: const TextStyle(fontSize: 14, height: 1.5),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 26),
+                SizedBox(
+                  width: double.infinity,
+                  height: 64,
+                  child: FilledButton.icon(
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh, size: 26),
+                    label: const Text(
+                      'إعادة المحاولة',
+                      style: TextStyle(
+                        fontSize: 21,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
