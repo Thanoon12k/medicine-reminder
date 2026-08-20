@@ -29,6 +29,9 @@ class AppState extends ChangeNotifier {
   double textScale = 1.0;
   bool defaultAlarmMode = true;
 
+  /// نطق اسم الدواء صوتياً عند المنبه (إن كانت العربية مثبّتة في الجهاز).
+  bool voiceEnabled = true;
+
   /// مفتاح آخر جرعة أُضيفت — لتشغيل حركة سقوط الحبة داخل العلبة.
   String? lastDropKey;
 
@@ -78,6 +81,7 @@ class AppState extends ChangeNotifier {
     snoozeMinutes = int.tryParse(settings['snooze_minutes'] ?? '10') ?? 10;
     textScale = double.tryParse(settings['text_scale'] ?? '1.0') ?? 1.0;
     defaultAlarmMode = (settings['default_alarm'] ?? '1') == '1';
+    voiceEnabled = (settings['voice_enabled'] ?? '1') == '1';
     currentPatientId = int.tryParse(settings['current_patient'] ?? '');
     Fmt.arabicDigits = arabicDigits;
 
@@ -416,6 +420,12 @@ class AppState extends ChangeNotifier {
 
   /// تحديث الواجهة (يُستدعى عند عودة التطبيق للمقدمة).
   void refreshUi() => notifyListeners();
+
+  Future<void> setVoiceEnabled(bool value) async {
+    voiceEnabled = value;
+    await _db.setSetting('voice_enabled', value ? '1' : '0');
+    notifyListeners();
+  }
 
   Future<void> setDefaultAlarmMode(bool value) async {
     defaultAlarmMode = value;

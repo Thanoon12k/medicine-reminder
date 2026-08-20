@@ -6,6 +6,7 @@ import '../core/theme.dart';
 import '../data/app_state.dart';
 import '../models/models.dart';
 import '../services/notifications.dart';
+import '../services/speech.dart';
 import '../widgets/common.dart';
 import '../widgets/pill_art.dart';
 
@@ -36,7 +37,38 @@ class _AlarmScreenState extends State<AlarmScreen>
   bool _busy = false;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startVoice());
+  }
+
+  /// نطق اسم الدواء فوق نغمة المنبه، إن كانت العربية مثبّتة في الجهاز.
+  /// الصوت المرفق داخل التطبيق يعمل في كل الحالات، وهذا إضافة عليه.
+  Future<void> _startVoice() async {
+    if (!appState.voiceEnabled || !Speech.ready) return;
+    final Medicine? m = appState.medicineById(widget.medicineId);
+    if (m == null) return;
+    final Patient? patient = appState.patientById(m.patientId);
+    final String text = Speech.sentence(
+      medicineName: m.name,
+      patientName: patient?.name ?? '',
+      dose: m.dose,
+      unit: m.unit,
+    );
+
+    // نترك نغمة المنبه تُسمع أولاً ثم ننطق.
+    await Future<void>.delayed(const Duration(milliseconds: 1600));
+    for (int i = 0; i < 5; i++) {
+      if (!mounted || _busy) return;
+      await Speech.say(text);
+      if (!mounted || _busy) return;
+      await Future<void>.delayed(const Duration(seconds: 5));
+    }
+  }
+
+  @override
   void dispose() {
+    Speech.stop();
     _pulse.dispose();
     super.dispose();
   }
@@ -52,6 +84,7 @@ class _AlarmScreenState extends State<AlarmScreen>
   Future<void> _finish(Future<void> Function() action) async {
     if (_busy) return;
     setState(() => _busy = true);
+    await Speech.stop();
     await _stopSound();
     await action();
     if (mounted) Navigator.of(context).maybePop();

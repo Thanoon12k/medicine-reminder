@@ -60,8 +60,19 @@ class NotificationService {
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
 
-  static const String alarmChannelId = 'dawaii_alarm_v1';
-  static const String quietChannelId = 'dawaii_quiet_v1';
+  // ملاحظة: إعدادات القناة (الصوت، الأهمية، الاهتزاز) تُثبَّت عند أول إنشاء
+  // ولا يمكن تغييرها بعدها، لذلك نرفع رقم النسخة عند كل تغيير.
+  static const String alarmChannelId = 'dawaii_alarm_v3';
+  static const String quietChannelId = 'dawaii_quiet_v3';
+
+  /// هل نجح تحميل نغمة المنبه المرفقة؟ إن فشلت نستعمل نغمة الجهاز الافتراضية
+  /// بدل أن تتعطّل كل التنبيهات.
+  static bool alarmSoundOk = true;
+
+  /// نغمة المنبه المرفقة داخل التطبيق (res/raw/alarm_tone.wav).
+  /// لا نعتمد على نغمة الإشعار الافتراضية لأنها قد تكون «بلا صوت» في الجهاز.
+  static const RawResourceAndroidNotificationSound alarmSound =
+      RawResourceAndroidNotificationSound('alarm_tone');
 
   /// أقصى عدد إشعارات مجدولة في وقت واحد (حد النظام ٥٠٠).
   static const int maxScheduled = 380;
@@ -212,26 +223,52 @@ class NotificationService {
     final AndroidFlutterLocalNotificationsPlugin? android = _android;
     if (android == null) return;
 
-    await android.createNotificationChannel(
-      AndroidNotificationChannel(
-        alarmChannelId,
-        'منبه الدواء',
-        description: 'تنبيه قوي بصوت مستمر عند موعد الدواء',
-        importance: Importance.max,
-        playSound: true,
-        enableVibration: true,
-        enableLights: true,
-        vibrationPattern: Int64List.fromList(<int>[
-          0,
-          700,
-          400,
-          700,
-          400,
-          700,
-        ]),
-        audioAttributesUsage: AudioAttributesUsage.alarm,
-      ),
-    );
+    // تنظيف قنوات النسخ القديمة.
+    for (final String old in <String>[
+      'dawaii_alarm_v1',
+      'dawaii_quiet_v1',
+      'dawaii_alarm_v2',
+      'dawaii_quiet_v2',
+    ]) {
+      try {
+        await android.deleteNotificationChannel(channelId: old);
+      } catch (_) {}
+    }
+
+    Future<void> createAlarmChannel({required bool withSound}) =>
+        android.createNotificationChannel(
+          AndroidNotificationChannel(
+            alarmChannelId,
+            'منبه الدواء',
+            description: 'تنبيه قوي بصوت مستمر عند موعد الدواء',
+            importance: Importance.max,
+            playSound: true,
+            sound: withSound ? alarmSound : null,
+            enableVibration: true,
+            enableLights: true,
+            vibrationPattern: Int64List.fromList(<int>[
+              0,
+              700,
+              400,
+              700,
+              400,
+              700,
+            ]),
+            audioAttributesUsage: AudioAttributesUsage.alarm,
+          ),
+        );
+
+    // إن لم تُحزَّم نغمة المنبه مع التطبيق لأي سبب، لا نُسقِط التنبيهات كلها —
+    // نرجع إلى نغمة الجهاز الافتراضية.
+    try {
+      await createAlarmChannel(withSound: true);
+      alarmSoundOk = true;
+    } catch (e) {
+      alarmSoundOk = false;
+      initError = 'نغمة المنبه المرفقة غير متاحة، سيُستعمل صوت الجهاز. ($e)';
+      debugPrint('تعذّر استعمال نغمة المنبه المرفقة: $e');
+      await createAlarmChannel(withSound: false);
+    }
 
     await android.createNotificationChannel(
       AndroidNotificationChannel(
@@ -292,6 +329,7 @@ class NotificationService {
             ongoing: true,
             autoCancel: false,
             playSound: true,
+            sound: alarmSoundOk ? alarmSound : null,
             enableVibration: true,
             visibility: NotificationVisibility.public,
             vibrationPattern: Int64List.fromList(<int>[
@@ -457,6 +495,7 @@ class NotificationService {
           ? AudioAttributesUsage.alarm
           : AudioAttributesUsage.notification,
       playSound: true,
+      sound: (alarm && alarmSoundOk) ? alarmSound : null,
       enableVibration: true,
       autoCancel: true,
       timeoutAfter: 15000,

@@ -5,6 +5,7 @@ import '../core/palette.dart';
 import '../core/theme.dart';
 import '../data/app_state.dart';
 import '../services/notifications.dart';
+import '../services/speech.dart';
 import '../widgets/common.dart';
 import 'patients_screen.dart';
 
@@ -179,6 +180,90 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ],
                       ),
+                    ],
+                  ),
+                ),
+
+                const SectionTitle('النطق الصوتي'),
+                SoftCard(
+                  child: Column(
+                    children: <Widget>[
+                      _SwitchRow(
+                        icon: Icons.record_voice_over_outlined,
+                        title: 'نطق اسم الدواء',
+                        subtitle: 'يُقرأ اسم المريض والدواء والجرعة فوق صوت المنبه',
+                        value: appState.voiceEnabled,
+                        onChanged: appState.setVoiceEnabled,
+                      ),
+                      const Divider(height: 26),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Icon(
+                            Speech.ready
+                                ? Icons.check_circle
+                                : Icons.info_outline,
+                            size: 26,
+                            color: Speech.ready
+                                ? AppColors.green
+                                : AppColors.amber,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              Speech.status,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                color: AppColors.muted,
+                                height: 1.5,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () =>
+                                  Speech.say('وقت الدواء، حبة واحدة'),
+                              icon: const Icon(Icons.campaign_outlined, size: 24),
+                              label: const Text(
+                                'تجربة النطق',
+                                style: TextStyle(fontSize: 17),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                await Speech.recheck();
+                                if (context.mounted) setState(() {});
+                              },
+                              icon: const Icon(Icons.refresh, size: 24),
+                              label: const Text(
+                                'إعادة الفحص',
+                                style: TextStyle(fontSize: 17),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (!Speech.ready) ...<Widget>[
+                        const SizedBox(height: 12),
+                        const Text(
+                          'لتفعيل النطق: إعدادات الهاتف ← اللغات والإدخال ← '
+                          'إخراج النص المنطوق ← ثبّت اللغة العربية.\n'
+                          'بدونه يبقى صوت المنبه المسجّل داخل التطبيق يعمل كالمعتاد.',
+                          style: TextStyle(
+                            fontSize: 15,
+                            color: AppColors.muted,
+                            height: 1.6,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

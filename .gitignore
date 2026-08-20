@@ -54,3 +54,4 @@ app.*.map.json
 /logcat.txt
 /build_log.txt
 /screen.png
+/installed.apk

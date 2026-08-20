@@ -29,6 +29,12 @@ android {
         release {
             // TODO: أضف مفتاح التوقيع الخاص بك قبل النشر
             signingConfig = signingConfigs.getByName("debug")
+
+            // مُقلّص الموارد يحذف نغمة المنبه وأيقونة الإشعار لأنهما
+            // مُشار إليهما من كود Dart فقط وليس من XML، فيتعطّل التنبيه كلياً.
+            // التوفير لا يتجاوز بضعة كيلوبايت، والموثوقية أهم هنا.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

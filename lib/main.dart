@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -8,6 +10,7 @@ import 'models/models.dart';
 import 'screens/alarm_screen.dart';
 import 'screens/home_screen.dart';
 import 'services/notifications.dart';
+import 'services/speech.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -120,7 +123,10 @@ class _MedicineAppState extends State<MedicineApp> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() => _phase = _Phase.ready);
 
-    // ٣) بعد الجاهزية: الأذونات وأي تنبيه فتح التطبيق.
+    // ٣) فحص محرك النطق العربي في الخلفية — لا ننتظره.
+    unawaited(Speech.init());
+
+    // ٤) بعد الجاهزية: الأذونات وأي تنبيه فتح التطبيق.
     await _afterReady();
   }
 
