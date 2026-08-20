@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -378,18 +377,34 @@ class NotificationService {
         ),
       ];
 
-  static String _title(Medicine m) => 'موعد الدواء: ${m.name}';
+  static String _title(DoseGroup g, String patientName) {
+    if (g.medicines.length == 1) {
+      final String name = g.medicines.first.name;
+      return patientName.isEmpty
+          ? 'موعد الدواء: $name'
+          : 'موعد دواء $patientName: $name';
+    }
+    return patientName.isEmpty
+        ? 'موعد ${g.medicines.length} أدوية'
+        : 'موعد أدوية $patientName (${g.medicines.length})';
+  }
 
-  static String _body(Medicine m, String patientName, DateTime at) =>
-      '$patientName — ${Fmt.countUnit(m.dose, m.unit)} الساعة ${Fmt.timeOf(at)}';
+  static String _body(DoseGroup g, DateTime at) {
+    if (g.medicines.length == 1) {
+      final Medicine m = g.medicines.first;
+      return '${Fmt.countUnit(m.dose, m.unit)} — الساعة ${Fmt.timeOf(at)}';
+    }
+    return '${g.names} — الساعة ${Fmt.timeOf(at)}';
+  }
 
   // ------------------------- الجدولة -------------------------
 
   /// يلغي كل المواعيد المجدولة ويعيد بناءها من جديد.
   ///
-  /// [occurrences] مرتّبة تصاعدياً حسب الوقت، وتحوي فقط المواعيد المستقبلية.
+  /// [groups] مجموعة واحدة لكل (مريض + وقت): كل أدوية المريض المستحقّة في
+  /// نفس اللحظة تُنبَّه بتنبيه واحد بدل تنبيه لكل دواء.
   static Future<void> rescheduleAll({
-    required List<({Medicine medicine, DateTime time})> occurrences,
+    required List<DoseGroup> groups,
     required Map<int, String> patientNames,
     required List<Snooze> snoozes,
     required Map<int, Medicine> medicinesById,
@@ -404,59 +419,77 @@ class NotificationService {
     final DateTime now = DateTime.now();
     int id = 1;
 
-    for (final o in occurrences) {
+    for (final DoseGroup g in groups) {
       if (id > maxScheduled) break;
-      if (!o.time.isAfter(now.add(const Duration(seconds: 5)))) continue;
-      await _scheduleOne(
+      if (!g.time.isAfter(now.add(const Duration(seconds: 5)))) continue;
+      await _scheduleGroup(
         id: id,
-        medicine: o.medicine,
-        patientName: patientNames[o.medicine.patientId] ?? '',
-        at: o.time,
-        scheduledKey: o.time.millisecondsSinceEpoch,
+        group: g,
+        patientName: patientNames[g.patientId] ?? '',
+        at: g.time,
+        scheduledKey: g.scheduledAt,
       );
       id++;
     }
 
-    // إعادة جدولة التأجيلات المسجّلة.
-    int snoozeIndex = 0;
+    // إعادة جدولة التأجيلات المسجّلة، مجمّعة أيضاً حسب (مريض + موعد أصلي).
+    final Map<String, List<Snooze>> snoozeGroups = <String, List<Snooze>>{};
     for (final Snooze s in snoozes) {
-      final Medicine? m = medicinesById[s.medicineId];
-      if (m == null) continue;
+      if (!medicinesById.containsKey(s.medicineId)) continue;
       final DateTime fire = DateTime.fromMillisecondsSinceEpoch(s.fireAt);
       if (!fire.isAfter(now)) continue;
-      await _scheduleOne(
+      snoozeGroups
+          .putIfAbsent('${s.patientId}_${s.fireAt}', () => <Snooze>[])
+          .add(s);
+    }
+
+    int snoozeIndex = 0;
+    for (final List<Snooze> list in snoozeGroups.values) {
+      if (snoozeIndex > 40) break;
+      final List<Medicine> meds = list
+          .map((Snooze s) => medicinesById[s.medicineId]!)
+          .toList();
+      final Snooze first = list.first;
+      final DateTime fire = DateTime.fromMillisecondsSinceEpoch(first.fireAt);
+      await _scheduleGroup(
         id: _snoozeIdBase + snoozeIndex,
-        medicine: m,
-        patientName: patientNames[m.patientId] ?? '',
+        group: DoseGroup(
+          patientId: first.patientId,
+          time: fire,
+          medicines: meds,
+        ),
+        patientName: patientNames[first.patientId] ?? '',
         at: fire,
-        scheduledKey: s.scheduledAt,
+        // نحتفظ بالموعد الأصلي حتى تُسجَّل الجرعة في مكانها الصحيح.
+        scheduledKey: first.scheduledAt,
       );
       snoozeIndex++;
-      if (snoozeIndex > 40) break;
     }
   }
 
-  static Future<void> _scheduleOne({
+  static Future<void> _scheduleGroup({
     required int id,
-    required Medicine medicine,
+    required DoseGroup group,
     required String patientName,
     required DateTime at,
     required int scheduledKey,
   }) async {
     try {
       final AlarmPayload payload = AlarmPayload(
-        medicineId: medicine.id ?? 0,
-        patientId: medicine.patientId,
+        medicineId: group.medicines.length == 1
+            ? (group.medicines.first.id ?? 0)
+            : 0,
+        patientId: group.patientId,
         scheduledAt: scheduledKey,
         notificationId: id,
       );
       await _plugin.zonedSchedule(
         id: id,
-        title: _title(medicine),
-        body: _body(medicine, patientName, at),
+        title: _title(group, patientName),
+        body: _body(group, at),
         scheduledDate: tz.TZDateTime.from(at, tz.local),
-        notificationDetails: _details(alarm: medicine.alarmMode),
-        androidScheduleMode: medicine.alarmMode
+        notificationDetails: _details(alarm: group.alarmMode),
+        androidScheduleMode: group.alarmMode
             ? AndroidScheduleMode.alarmClock
             : AndroidScheduleMode.exactAllowWhileIdle,
         payload: payload.encode(),

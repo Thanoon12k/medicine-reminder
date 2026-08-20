@@ -35,7 +35,9 @@ class _MedicineFormScreenState extends State<MedicineFormScreen> {
   late int _totalUnits = widget.existing?.totalUnits ?? 0;
   late DateTime _start = widget.existing?.start ?? DateTime.now();
   late int _durationDays = widget.existing?.durationDays ?? 0;
-  late List<int> _times = List<int>.from(widget.existing?.times ?? <int>[480]);
+  late final List<int> _times = List<int>.from(
+    widget.existing?.times ?? <int>[480],
+  );
   late int _weekdays = widget.existing?.weekdaysMask ?? 127;
   late bool _alarm = widget.existing?.alarmMode ?? appState.defaultAlarmMode;
 
@@ -253,12 +255,12 @@ class _MedicineFormScreenState extends State<MedicineFormScreen> {
                       yes: 'حذف',
                       danger: true,
                     );
-                    if (!ok) return;
+                    if (!ok || !mounted) return;
+                    final NavigatorState nav = Navigator.of(context);
                     await appState.deleteMedicine(widget.existing!.id!);
-                    if (mounted) {
-                      Navigator.pop(context);
-                      Navigator.pop(context);
-                    }
+                    if (!mounted) return;
+                    nav.pop(); // نغلق نموذج التعديل
+                    nav.pop(); // ثم شاشة تفاصيل الدواء المحذوف
                   },
                 ),
               ],

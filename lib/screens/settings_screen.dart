@@ -30,7 +30,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _check() async {
     final bool n = await NotificationService.notificationsEnabled();
     final bool e = await NotificationService.exactAlarmsAllowed();
-    if (mounted) setState(() {
+    if (!mounted) return;
+    setState(() {
       _notifsOn = n;
       _exactOn = e;
     });
@@ -281,14 +282,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 SoftCard(
                   child: Column(
                     children: <Widget>[
-                      _SwitchRow(
-                        icon: Icons.pin_outlined,
-                        title: 'الأرقام العربية (٠١٢٣)',
-                        subtitle: 'أطفئها لعرض الأرقام 0123',
-                        value: appState.arabicDigits,
-                        onChanged: appState.setArabicDigits,
-                      ),
-                      const Divider(height: 26),
                       const Align(
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(

@@ -39,9 +39,6 @@ Future<void> handleNotificationResponse(
     return;
   }
 
-  final Medicine? medicine = appState.medicineById(payload.medicineId);
-  if (medicine == null) return;
-
   if (appState.currentPatientId != payload.patientId) {
     await appState.setCurrentPatient(payload.patientId);
   }
@@ -50,21 +47,28 @@ Future<void> handleNotificationResponse(
     payload.scheduledAt,
   );
 
+  // التنبيه الواحد قد يخصّ عدة أدوية لنفس المريض في نفس اللحظة.
+  final List<DoseOccurrence> group = appState.occurrencesAt(
+    payload.patientId,
+    scheduled,
+  );
+  if (group.isEmpty) return;
+
   if (actionId == NotifAction.taken) {
     await NotificationService.cancel(payload.notificationId);
-    await appState.takeDose(medicine, scheduled);
+    await appState.takeGroup(group);
     return;
   }
   if (actionId == NotifAction.snooze) {
     await NotificationService.cancel(payload.notificationId);
-    await appState.snoozeDose(medicine, scheduled);
+    await appState.snoozeGroup(group);
     return;
   }
 
   navigatorKey.currentState?.push(
     MaterialPageRoute<void>(
       builder: (_) => AlarmScreen(
-        medicineId: payload.medicineId,
+        patientId: payload.patientId,
         scheduledAt: payload.scheduledAt,
         notificationId: payload.notificationId,
       ),

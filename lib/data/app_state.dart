@@ -24,7 +24,6 @@ class AppState extends ChangeNotifier {
   bool loaded = false;
 
   // ------------------------- الإعدادات -------------------------
-  bool arabicDigits = true;
   int snoozeMinutes = 10;
   double textScale = 1.0;
   bool defaultAlarmMode = true;
@@ -77,13 +76,11 @@ class AppState extends ChangeNotifier {
 
   Future<void> load() async {
     final Map<String, String> settings = await _db.allSettings();
-    arabicDigits = (settings['arabic_digits'] ?? '1') == '1';
     snoozeMinutes = int.tryParse(settings['snooze_minutes'] ?? '10') ?? 10;
     textScale = double.tryParse(settings['text_scale'] ?? '1.0') ?? 1.0;
     defaultAlarmMode = (settings['default_alarm'] ?? '1') == '1';
     voiceEnabled = (settings['voice_enabled'] ?? '1') == '1';
     currentPatientId = int.tryParse(settings['current_patient'] ?? '');
-    Fmt.arabicDigits = arabicDigits;
 
     patients = await _db.patients();
     medicines = await _db.medicines();
@@ -232,6 +229,103 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
+  // ------------------------- التجميع -------------------------
+
+  /// كل أدوية مريض معيّن المستحقّة في لحظة واحدة بالضبط.
+  List<DoseOccurrence> occurrencesAt(int patientId, DateTime time) {
+    final List<DoseOccurrence> out = <DoseOccurrence>[];
+    for (final Medicine m in medicines) {
+      if (m.patientId != patientId || m.id == null) continue;
+      if (!m.activeOnDay(time)) continue;
+      final int minutes = time.hour * 60 + time.minute;
+      if (!m.times.contains(minutes)) continue;
+      out.add(
+        DoseOccurrence(medicine: m, time: time, log: logFor(m.id!, time)),
+      );
+    }
+    out.sort(
+      (DoseOccurrence a, DoseOccurrence b) =>
+          a.medicine.name.compareTo(b.medicine.name),
+    );
+    return out;
+  }
+
+  /// مجموعات المواعيد القادمة: مجموعة واحدة لكل (مريض + وقت).
+  List<DoseGroup> upcomingGroups({int daysAhead = 10}) {
+    final DateTime now = DateTime.now();
+    final Map<String, DoseGroup> groups = <String, DoseGroup>{};
+
+    for (int d = 0; d < daysAhead; d++) {
+      final DateTime day = Fmt.dateOnly(now.add(Duration(days: d)));
+      for (final Medicine m in medicines) {
+        if (m.id == null) continue;
+        if (!m.activeOnDay(day)) continue;
+        if (m.totalUnits > 0 && m.remainingUnits <= 0) continue;
+        for (final int minutes in m.times) {
+          final DateTime t = DateTime(
+            day.year,
+            day.month,
+            day.day,
+            minutes ~/ 60,
+            minutes % 60,
+          );
+          if (!t.isAfter(now)) continue;
+          final String key = '${m.patientId}_${t.millisecondsSinceEpoch}';
+          groups
+              .putIfAbsent(
+                key,
+                () => DoseGroup(
+                  patientId: m.patientId,
+                  time: t,
+                  medicines: <Medicine>[],
+                ),
+              )
+              .medicines
+              .add(m);
+        }
+      }
+    }
+
+    final List<DoseGroup> out = groups.values.toList();
+    out.sort((DoseGroup a, DoseGroup b) => a.time.compareTo(b.time));
+    return out;
+  }
+
+  /// مجموعة أخرى مستحقّة الآن لمريض مختلف (لعرضها بعد الانتهاء من الحالية).
+  ({int patientId, DateTime time})? pendingGroupAfter({
+    required int excludePatientId,
+    required DateTime time,
+  }) {
+    for (final Patient p in patients) {
+      if (p.id == null || p.id == excludePatientId) continue;
+      final List<DoseOccurrence> list = occurrencesAt(p.id!, time);
+      if (list.any((DoseOccurrence o) => o.isPending)) {
+        return (patientId: p.id!, time: time);
+      }
+    }
+    return null;
+  }
+
+  Future<void> takeGroup(List<DoseOccurrence> group) async {
+    for (final DoseOccurrence o in group) {
+      if (o.isPending) await takeDose(o.medicine, o.time);
+    }
+  }
+
+  Future<void> skipGroup(List<DoseOccurrence> group) async {
+    for (final DoseOccurrence o in group) {
+      if (o.isPending) await skipDose(o.medicine, o.time);
+    }
+  }
+
+  Future<void> snoozeGroup(List<DoseOccurrence> group, {int? minutes}) async {
+    for (final DoseOccurrence o in group) {
+      if (o.isPending) {
+        await snoozeDose(o.medicine, o.time, minutes: minutes);
+      }
+    }
+  }
+
   // ------------------------- تسجيل الجرعات -------------------------
 
   Future<void> takeDose(Medicine m, DateTime scheduled) async {
@@ -361,33 +455,8 @@ class AppState extends ChangeNotifier {
   Future<void> reschedule({int daysAhead = 10}) async {
     try {
       await _db.purgeOldSnoozes();
-      final DateTime now = DateTime.now();
-      final List<({Medicine medicine, DateTime time})> upcoming =
-          <({Medicine medicine, DateTime time})>[];
-
-      for (int d = 0; d < daysAhead; d++) {
-        final DateTime day = Fmt.dateOnly(now.add(Duration(days: d)));
-        for (final Medicine m in medicines) {
-          if (m.id == null) continue;
-          if (!m.activeOnDay(day)) continue;
-          if (m.totalUnits > 0 && m.remainingUnits <= 0) continue;
-          for (final int minutes in m.times) {
-            final DateTime t = DateTime(
-              day.year,
-              day.month,
-              day.day,
-              minutes ~/ 60,
-              minutes % 60,
-            );
-            if (!t.isAfter(now)) continue;
-            upcoming.add((medicine: m, time: t));
-          }
-        }
-      }
-      upcoming.sort((a, b) => a.time.compareTo(b.time));
-
       await NotificationService.rescheduleAll(
-        occurrences: upcoming,
+        groups: upcomingGroups(daysAhead: daysAhead),
         patientNames: patientNames,
         snoozes: await _db.snoozes(),
         medicinesById: medicinesById,
@@ -398,13 +467,6 @@ class AppState extends ChangeNotifier {
   }
 
   // ------------------------- تعديل الإعدادات -------------------------
-
-  Future<void> setArabicDigits(bool value) async {
-    arabicDigits = value;
-    Fmt.arabicDigits = value;
-    await _db.setSetting('arabic_digits', value ? '1' : '0');
-    notifyListeners();
-  }
 
   Future<void> setSnoozeMinutes(int value) async {
     snoozeMinutes = value;

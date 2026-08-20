@@ -357,6 +357,32 @@ class DoseOccurrence {
   int get key => time.millisecondsSinceEpoch;
 }
 
+/// مجموعة أدوية لنفس المريض في نفس اللحظة — تنبيه واحد لها كلها.
+///
+/// بدون التجميع كان كل دواء يُطلق منبهاً منفصلاً، فتتزاحم أربع شاشات
+/// وأربعة أصوات، ويضيع تسجيل بقية الجرعات عند الاستجابة لواحد منها.
+class DoseGroup {
+  DoseGroup({
+    required this.patientId,
+    required this.time,
+    required this.medicines,
+  });
+
+  final int patientId;
+  final DateTime time;
+  final List<Medicine> medicines;
+
+  /// يكفي أن يكون دواء واحد منبهاً قوياً ليصير التنبيه قوياً.
+  bool get alarmMode => medicines.any((Medicine m) => m.alarmMode);
+
+  int get scheduledAt => time.millisecondsSinceEpoch;
+
+  String get key => '${patientId}_$scheduledAt';
+
+  /// أسماء الأدوية مفصولة بفواصل — تُستعمل في نص الإشعار والنطق.
+  String get names => medicines.map((Medicine m) => m.name).join('، ');
+}
+
 /// تأجيل مسجَّل (يُعاد جدولته بعد إعادة تشغيل الهاتف).
 class Snooze {
   Snooze({

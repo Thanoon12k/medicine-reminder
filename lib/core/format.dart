@@ -1,39 +1,14 @@
 /// تنسيق الأرقام والتواريخ والأوقات بالعربية.
+///
+/// الأرقام تُعرض دائماً بالصيغة الإنجليزية (0123) لأنها أوضح على الشاشات
+/// الصغيرة وأسهل قراءة لأغلب المستخدمين.
 class Fmt {
-  /// هل تُعرض الأرقام بالصيغة العربية (٠١٢٣) أم الإنجليزية (0123).
-  static bool arabicDigits = true;
-
-  static const List<String> _ar = <String>[
-    '٠',
-    '١',
-    '٢',
-    '٣',
-    '٤',
-    '٥',
-    '٦',
-    '٧',
-    '٨',
-    '٩',
-  ];
-
-  /// تحويل أي رقم إلى نص بالأرقام المختارة.
-  static String n(Object value) {
-    String s = value is double
-        ? (value == value.roundToDouble()
-              ? value.toInt().toString()
-              : value.toString())
-        : value.toString();
-    if (!arabicDigits) return s;
-    final StringBuffer b = StringBuffer();
-    for (final int code in s.runes) {
-      if (code >= 48 && code <= 57) {
-        b.write(_ar[code - 48]);
-      } else {
-        b.writeCharCode(code);
-      }
-    }
-    return b.toString();
-  }
+  /// تحويل أي رقم إلى نص.
+  static String n(Object value) => value is double
+      ? (value == value.roundToDouble()
+            ? value.toInt().toString()
+            : value.toString())
+      : value.toString();
 
   static const List<String> monthNames = <String>[
     'كانون الثاني',

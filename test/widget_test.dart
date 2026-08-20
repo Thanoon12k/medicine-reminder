@@ -4,15 +4,13 @@ import 'package:medicine_reminder_app/models/models.dart';
 
 void main() {
   group('تنسيق الأرقام والأوقات', () {
-    test('الأرقام العربية', () {
-      Fmt.arabicDigits = true;
-      expect(Fmt.n(2026), '٢٠٢٦');
-      Fmt.arabicDigits = false;
+    test('الأرقام بالصيغة الإنجليزية', () {
       expect(Fmt.n(2026), '2026');
+      expect(Fmt.n(2.0), '2');
+      expect(Fmt.n(1.5), '1.5');
     });
 
     test('تنسيق الوقت', () {
-      Fmt.arabicDigits = false;
       expect(Fmt.time(8 * 60 + 30), '8:30 صباحاً');
       expect(Fmt.time(20 * 60), '8:00 ليلاً');
       expect(Fmt.time(0), '12:00 ليلاً');
