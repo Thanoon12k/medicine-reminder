@@ -1,0 +1,19 @@
+# Binary assets — never diff or normalise these
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ttf binary
+*.otf binary
+*.jks binary
+*.keystore binary
+
+# Keep Windows batch files CRLF
+*.bat text eol=crlf
+gradlew text eol=lf
+
+# Language stats: don't count generated platform folders as source
+ios/**        linguist-vendored
+macos/**      linguist-vendored
+linux/**      linguist-vendored
+docs/**       linguist-documentation
