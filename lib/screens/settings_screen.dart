@@ -4,6 +4,7 @@ import '../core/format.dart';
 import '../core/palette.dart';
 import '../core/theme.dart';
 import '../data/app_state.dart';
+import '../services/alarm_audio.dart';
 import '../services/notifications.dart';
 import '../services/speech.dart';
 import '../widgets/common.dart';
@@ -154,8 +155,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         children: <Widget>[
                           Expanded(
                             child: OutlinedButton.icon(
-                              onPressed: () =>
-                                  NotificationService.showTest(alarm: true),
+                              onPressed: () async {
+                                // نشغّل النغمة فعلياً كما ستُسمع عند الموعد،
+                                // ثم نوقفها بعد ست ثوانٍ.
+                                await AlarmAudio.start();
+                                await NotificationService.showTest(alarm: true);
+                                await Future<void>.delayed(
+                                  const Duration(seconds: 6),
+                                );
+                                await AlarmAudio.stop();
+                              },
                               icon: const Icon(Icons.volume_up, size: 24),
                               label: const Text(
                                 'تجربة المنبه',

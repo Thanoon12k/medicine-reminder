@@ -5,6 +5,7 @@ import '../core/palette.dart';
 import '../core/theme.dart';
 import '../data/app_state.dart';
 import '../models/models.dart';
+import '../services/alarm_audio.dart';
 import '../services/notifications.dart';
 import '../services/speech.dart';
 import '../widgets/common.dart';
@@ -39,6 +40,9 @@ class _AlarmScreenState extends State<AlarmScreen>
   @override
   void initState() {
     super.initState();
+    // نشغّل الصوت بأنفسنا: صوت الإشعار يُكتم على بعض الأجهزة عند فتح
+    // الشاشة الكاملة، فيبقى الاهتزاز وحده.
+    AlarmAudio.start();
     WidgetsBinding.instance.addPostFrameCallback((_) => _startVoice());
   }
 
@@ -68,17 +72,20 @@ class _AlarmScreenState extends State<AlarmScreen>
 
   @override
   void dispose() {
+    AlarmAudio.stop();
     Speech.stop();
     _pulse.dispose();
     super.dispose();
   }
 
   Future<void> _stopSound() async {
+    await AlarmAudio.stop();
     if (widget.notificationId > 0) {
       await NotificationService.cancel(widget.notificationId);
-    } else {
-      await NotificationService.cancelAll();
     }
+    // ضمان إيقاف الرنين والاهتزاز مهما كان معرّف الإشعار:
+    // إعادة الجدولة تعيد بناء المواعيد القادمة بعدها مباشرة.
+    await NotificationService.cancelAll();
   }
 
   Future<void> _finish(Future<void> Function() action) async {
@@ -87,7 +94,15 @@ class _AlarmScreenState extends State<AlarmScreen>
     await Speech.stop();
     await _stopSound();
     await action();
-    if (mounted) Navigator.of(context).maybePop();
+    if (!mounted) return;
+    // مهم: maybePop لا يعمل هنا لأن PopScope(canPop:false) يرفضه،
+    // فكانت الشاشة تبقى معلّقة بعد الضغط على «أخذت الدواء».
+    final NavigatorState nav = Navigator.of(context);
+    if (nav.canPop()) {
+      nav.pop();
+    } else {
+      setState(() => _busy = false);
+    }
   }
 
   @override
@@ -116,7 +131,9 @@ class _AlarmScreenState extends State<AlarmScreen>
                     label: 'إغلاق',
                     onPressed: () async {
                       await _stopSound();
-                      if (context.mounted) Navigator.of(context).maybePop();
+                      if (!context.mounted) return;
+                      final NavigatorState nav = Navigator.of(context);
+                      if (nav.canPop()) nav.pop();
                     },
                   ),
                 ],

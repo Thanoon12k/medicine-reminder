@@ -2,7 +2,9 @@ name: medicine_reminder_app
 description: "تطبيق التذكير بالدواء - يعمل بدون إنترنت"
 publish_to: 'none'
 
-version: 1.0.0+1
+# رقم البناء أعلى من نسخ split-per-abi السابقة (١٠٠١+) حتى لا يرفض
+# أندرويد التحديث باعتباره تنزيلاً لإصدار أقدم.
+version: 1.0.1+3000
 
 environment:
   sdk: ^3.13.0
