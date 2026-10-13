@@ -452,18 +452,37 @@ class AppState extends ChangeNotifier {
 
   // ------------------------- إعادة الجدولة -------------------------
 
-  Future<void> reschedule({int daysAhead = 10}) async {
-    try {
-      await _db.purgeOldSnoozes();
-      await NotificationService.rescheduleAll(
-        groups: upcomingGroups(daysAhead: daysAhead),
-        patientNames: patientNames,
-        snoozes: await _db.snoozes(),
-        medicinesById: medicinesById,
-      );
-    } catch (e) {
-      debugPrint('تعذّرت إعادة الجدولة: $e');
+  // Rebuilds must never overlap. Previously each resume or edit could cancel
+  // alarms while another rebuild was still scheduling them.
+  Future<void> _scheduleQueue = Future<void>.value();
+  DateTime? _lastScheduleAttempt;
+
+  Future<void> reschedule({int daysAhead = 90, bool force = true}) {
+    // Re-entering the app should not cancel/recreate hundreds of alarms.
+    if (!force &&
+        _lastScheduleAttempt != null &&
+        DateTime.now().difference(_lastScheduleAttempt!) <
+            const Duration(minutes: 20)) {
+      return _scheduleQueue;
     }
+
+    final Future<void> next = _scheduleQueue.then((_) async {
+      _lastScheduleAttempt = DateTime.now();
+      try {
+        await _db.purgeOldSnoozes();
+        await NotificationService.rescheduleAll(
+          groups: upcomingGroups(daysAhead: daysAhead),
+          patientNames: patientNames,
+          snoozes: await _db.snoozes(),
+          medicinesById: medicinesById,
+        );
+      } catch (e) {
+        NotificationService.lastScheduleError = 'تعذّرت إعادة الجدولة: $e';
+        debugPrint('تعذّرت إعادة الجدولة: $e');
+      }
+    });
+    _scheduleQueue = next;
+    return next;
   }
 
   // ------------------------- تعديل الإعدادات -------------------------
