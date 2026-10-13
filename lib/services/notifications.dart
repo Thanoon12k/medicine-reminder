@@ -81,6 +81,14 @@ class NotificationService {
 
   static bool _ready = false;
 
+  /// Diagnostics shown in Settings. A successful "sound test" alone does not
+  /// prove that Android accepted future alarms.
+  static int lastScheduledCount = 0;
+  static String? lastScheduleError;
+  static DateTime? lastScheduleAt;
+  static bool usingInexactFallback = false;
+
+
   /// هل نجحت تهيئة التنبيهات؟ إن كانت false يعمل التطبيق بدون تذكير.
   static bool get isReady => _ready;
 
@@ -284,16 +292,31 @@ class NotificationService {
   /// طلب كل الأذونات اللازمة للمنبه.
   static Future<bool> requestPermissions() async {
     final AndroidFlutterLocalNotificationsPlugin? android = _android;
-    if (android == null) return true;
-    bool ok = true;
+    if (android == null) return false;
+
+    // Notification and exact-alarm permissions are independent on Android 13+.
+    // Requesting exact alarms only when notifications are disabled loses alarms
+    // silently on a fresh install or after the system revokes that permission.
     try {
-      ok = (await android.requestNotificationsPermission()) ?? false;
-      await android.requestExactAlarmsPermission();
+      if (!await notificationsEnabled()) {
+        await android.requestNotificationsPermission();
+      }
+    } catch (e) {
+      debugPrint('تعذّر طلب صلاحية الإشعارات: $e');
+    }
+    try {
+      if (!await exactAlarmsAllowed()) {
+        await android.requestExactAlarmsPermission();
+      }
+    } catch (e) {
+      debugPrint('تعذّر طلب صلاحية المنبه الدقيق: $e');
+    }
+    try {
       await android.requestFullScreenIntentPermission();
     } catch (e) {
-      debugPrint('تعذّر طلب الأذونات: $e');
+      debugPrint('تعذّر طلب صلاحية شاشة المنبه: $e');
     }
-    return ok;
+    return await notificationsEnabled() && await exactAlarmsAllowed();
   }
 
   static Future<bool> notificationsEnabled() async {
@@ -409,93 +432,189 @@ class NotificationService {
     required List<Snooze> snoozes,
     required Map<int, Medicine> medicinesById,
   }) async {
-    if (!_ready) return;
+    if (!_ready) {
+      lastScheduleError = initError ?? 'خدمة التنبيهات غير جاهزة';
+      return;
+    }
+
+    lastScheduleError = null;
+    lastScheduledCount = 0;
+    final bool exactAllowed = await exactAlarmsAllowed();
+    usingInexactFallback = !exactAllowed;
+    if (!exactAllowed) {
+      lastScheduleError =
+          'صلاحية المنبهات الدقيقة غير مفعلة؛ التنبيهات البديلة قد تتأخر.';
+    }
+
+    // Do not proceed if pending alarms cannot be removed: overlapping IDs
+    // and mixed generations would then become impossible to reason about.
     try {
       await _plugin.cancelAllPendingNotifications();
-    } catch (_) {
-      // بعض الأجهزة القديمة لا تدعم هذه الدالة.
+    } catch (e) {
+      lastScheduleError = 'تعذّر تحديث جدول التنبيهات: $e';
+      debugPrint(lastScheduleError);
+      return;
     }
 
     final DateTime now = DateTime.now();
     int id = 1;
+    int failures = 0;
 
     for (final DoseGroup g in groups) {
       if (id > maxScheduled) break;
       if (!g.time.isAfter(now.add(const Duration(seconds: 5)))) continue;
-      await _scheduleGroup(
+      final bool scheduled = await _scheduleGroup(
         id: id,
         group: g,
         patientName: patientNames[g.patientId] ?? '',
         at: g.time,
         scheduledKey: g.scheduledAt,
+        exactAllowed: exactAllowed,
       );
+      if (scheduled) {
+        lastScheduledCount++;
+      } else {
+        failures++;
+      }
       id++;
     }
 
-    // إعادة جدولة التأجيلات المسجّلة، مجمّعة أيضاً حسب (مريض + موعد أصلي).
+    // Snoozes are stored in the DB, and must be restored after each rebuild.
     final Map<String, List<Snooze>> snoozeGroups = <String, List<Snooze>>{};
-    for (final Snooze s in snoozes) {
-      if (!medicinesById.containsKey(s.medicineId)) continue;
-      final DateTime fire = DateTime.fromMillisecondsSinceEpoch(s.fireAt);
+    for (final Snooze snooze in snoozes) {
+      if (!medicinesById.containsKey(snooze.medicineId)) continue;
+      final DateTime fire = DateTime.fromMillisecondsSinceEpoch(snooze.fireAt);
       if (!fire.isAfter(now)) continue;
       snoozeGroups
-          .putIfAbsent('${s.patientId}_${s.fireAt}', () => <Snooze>[])
-          .add(s);
+          .putIfAbsent(
+            '${snooze.patientId}_${snooze.fireAt}',
+            () => <Snooze>[],
+          )
+          .add(snooze);
     }
 
     int snoozeIndex = 0;
     for (final List<Snooze> list in snoozeGroups.values) {
-      if (snoozeIndex > 40) break;
-      final List<Medicine> meds = list
-          .map((Snooze s) => medicinesById[s.medicineId]!)
-          .toList();
+      if (snoozeIndex >= 40) break;
       final Snooze first = list.first;
-      final DateTime fire = DateTime.fromMillisecondsSinceEpoch(first.fireAt);
-      await _scheduleGroup(
+      final bool scheduled = await _scheduleGroup(
         id: _snoozeIdBase + snoozeIndex,
         group: DoseGroup(
           patientId: first.patientId,
-          time: fire,
-          medicines: meds,
+          time: DateTime.fromMillisecondsSinceEpoch(first.fireAt),
+          medicines: list.map((Snooze s) => medicinesById[s.medicineId]!).toList(),
         ),
         patientName: patientNames[first.patientId] ?? '',
-        at: fire,
-        // نحتفظ بالموعد الأصلي حتى تُسجَّل الجرعة في مكانها الصحيح.
+        at: DateTime.fromMillisecondsSinceEpoch(first.fireAt),
         scheduledKey: first.scheduledAt,
+        exactAllowed: exactAllowed,
       );
+      if (scheduled) {
+        lastScheduledCount++;
+      } else {
+        failures++;
+      }
       snoozeIndex++;
     }
+    lastScheduleAt = DateTime.now();
+
+    if (failures > 0) {
+      lastScheduleError =
+          'فشلت جدولة $failures تنبيهات. افتح أذونات المنبه وافحص إعدادات البطارية.';
+    } else if (groups.length > maxScheduled) {
+      lastScheduleError =
+          'عدد المواعيد أكبر من السعة ($maxScheduled). جُدولت أقرب المواعيد فقط.';
+    }
+    debugPrint(
+      'Dawaii: scheduled=$lastScheduledCount, failures=$failures, '
+      'exactAllowed=$exactAllowed',
+    );
   }
 
-  static Future<void> _scheduleGroup({
+  static Future<bool> _scheduleGroup({
     required int id,
     required DoseGroup group,
     required String patientName,
     required DateTime at,
     required int scheduledKey,
+    required bool exactAllowed,
   }) async {
+    final AlarmPayload payload = AlarmPayload(
+      medicineId: group.medicines.length == 1
+          ? (group.medicines.first.id ?? 0)
+          : 0,
+      patientId: group.patientId,
+      scheduledAt: scheduledKey,
+      notificationId: id,
+    );
+
+    Future<void> schedule(AndroidScheduleMode mode) => _plugin.zonedSchedule(
+      id: id,
+      title: _title(group, patientName),
+      body: _body(group, at),
+      scheduledDate: tz.TZDateTime.from(at, tz.local),
+      notificationDetails: _details(alarm: group.alarmMode),
+      androidScheduleMode: mode,
+      payload: payload.encode(),
+    );
+
+    if (!exactAllowed) {
+      try {
+        await schedule(AndroidScheduleMode.inexactAllowWhileIdle);
+        return true;
+      } catch (e) {
+        debugPrint('تعذّرت جدولة التنبيه البديل $id: $e');
+        return false;
+      }
+    }
+
     try {
-      final AlarmPayload payload = AlarmPayload(
-        medicineId: group.medicines.length == 1
-            ? (group.medicines.first.id ?? 0)
-            : 0,
-        patientId: group.patientId,
-        scheduledAt: scheduledKey,
-        notificationId: id,
-      );
-      await _plugin.zonedSchedule(
-        id: id,
-        title: _title(group, patientName),
-        body: _body(group, at),
-        scheduledDate: tz.TZDateTime.from(at, tz.local),
-        notificationDetails: _details(alarm: group.alarmMode),
-        androidScheduleMode: group.alarmMode
+      await schedule(
+        group.alarmMode
             ? AndroidScheduleMode.alarmClock
             : AndroidScheduleMode.exactAllowWhileIdle,
-        payload: payload.encode(),
       );
+      return true;
     } catch (e) {
-      debugPrint('تعذّرت جدولة التنبيه: $e');
+      // The permission can be revoked between the check and scheduling.
+      // Keep an inexact reminder rather than losing the dose entirely.
+      debugPrint('فشلت الجدولة الدقيقة $id، تجربة بديلة: $e');
+      try {
+        await schedule(AndroidScheduleMode.inexactAllowWhileIdle);
+        usingInexactFallback = true;
+        lastScheduleError =
+            'بعض المنبهات غير دقيقة بسبب قيود أو صلاحيات أندرويد.';
+        return true;
+      } catch (fallbackError) {
+        debugPrint('فشلت جدولة التنبيه $id بالكامل: $fallbackError');
+        return false;
+      }
+    }
+  }
+
+  /// Test the actual scheduler; unlike showTest(), this can be tested after
+  /// rebooting the phone without opening the app again.
+  static Future<bool> scheduleRebootTest() async {
+    if (!_ready) return false;
+    try {
+      await _plugin.zonedSchedule(
+        id: 999998,
+        title: 'اختبار المنبه بعد إعادة التشغيل',
+        body: 'إذا وصلك هذا التنبيه بعد إطفاء الهاتف وتشغيله، فالجدولة تعمل.',
+        scheduledDate: tz.TZDateTime.from(
+          DateTime.now().add(const Duration(minutes: 3)),
+          tz.local,
+        ),
+        notificationDetails: _details(alarm: true),
+        androidScheduleMode: await exactAlarmsAllowed()
+            ? AndroidScheduleMode.alarmClock
+            : AndroidScheduleMode.inexactAllowWhileIdle,
+      );
+      return true;
+    } catch (e) {
+      lastScheduleError = 'تعذّر جدولة اختبار إعادة التشغيل: $e';
+      debugPrint(lastScheduleError);
+      return false;
     }
   }
 
