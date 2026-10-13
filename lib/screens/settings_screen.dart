@@ -94,6 +94,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             color: AppColors.amber,
                             onPressed: () async {
                               await NotificationService.requestPermissions();
+                              await appState.reschedule();
                               await _check();
                             },
                           ),
@@ -101,6 +102,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                   ),
+
+                // Make schedule failures visible rather than reporting a
+                // successful audio test while every future alarm was rejected.
+                SoftCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      const Text(
+                        'حالة المواعيد المجدولة',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'عدد التنبيهات المجدولة: ${NotificationService.lastScheduledCount}',
+                      ),
+                      if (NotificationService.lastScheduleError != null) ...<Widget>[
+                        const SizedBox(height: 8),
+                        Text(
+                          NotificationService.lastScheduleError!,
+                          style: const TextStyle(color: AppColors.red),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final bool success =
+                              await NotificationService.scheduleRebootTest();
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                success
+                                    ? 'تم ضبط اختبار بعد 3 دقائق. أعد تشغيل الهاتف ولا تفتح التطبيق.'
+                                    : 'فشل ضبط الاختبار؛ تحقق من الصلاحيات.',
+                              ),
+                            ),
+                          );
+                          await _check();
+                        },
+                        icon: const Icon(Icons.restart_alt),
+                        label: const Text('اختبار المنبه بعد إعادة التشغيل'),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
 
                 const SectionTitle('التنبيه'),
                 SoftCard(
