@@ -136,9 +136,17 @@ class _MedicineAppState extends State<MedicineApp> with WidgetsBindingObserver {
 
   Future<void> _afterReady() async {
     try {
-      if (!await NotificationService.notificationsEnabled()) {
+      final bool notificationsAllowed =
+          await NotificationService.notificationsEnabled();
+      final bool exactAllowed =
+          await NotificationService.exactAlarmsAllowed();
+      if (!notificationsAllowed || !exactAllowed) {
         await NotificationService.requestPermissions();
       }
+      // load() ran before the permission dialog. Rebuild after Android returns
+      // from settings; otherwise all exact schedules rejected at first launch
+      // are lost until the user manually reopens the app.
+      await appState.reschedule();
     } catch (e) {
       debugPrint('تعذّر طلب الأذونات: $e');
     }
@@ -166,7 +174,8 @@ class _MedicineAppState extends State<MedicineApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && _phase == _Phase.ready) {
-      appState.reschedule();
+      // Keep the rolling horizon fresh without continuously cancelling it.
+      appState.reschedule(force: false);
       appState.refreshUi();
     }
   }
